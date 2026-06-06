@@ -10,7 +10,8 @@
       "Bash(npm run *)",
       "Bash(Test-Path *)",
       "Bash(Get-ChildItem -Path 'E:\\\\龙虾小项目\\\\cc_06\\\\apps\\\\api\\\\src\\\\modules\\\\' -Directory)",
-      "Bash(Select-Object -ExpandProperty Name)"
+      "Bash(Select-Object -ExpandProperty Name)",
+      "Bash(npx tsc *)"
     ]
   }
 }

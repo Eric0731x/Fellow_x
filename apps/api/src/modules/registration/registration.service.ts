@@ -1,12 +1,16 @@
 import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PointService } from '../point/point.service';
 import type { RegisterDto } from './dto/register.dto';
 import type { ReviewDto } from './dto/review.dto';
 import type { RegistrationQueryDto } from './dto/registration-query.dto';
 
 @Injectable()
 export class RegistrationService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private pointService: PointService,
+  ) {}
 
   async register(userId: string, activityId: string, dto: RegisterDto) {
     const activity = await this.prisma.activity.findFirst({
@@ -113,7 +117,7 @@ export class RegistrationService {
     }
 
     if (registration.state === 'APPROVED') {
-      // BR-RG-06: Release slot
+      // BR-RG-06: Release slot + deduct 50 growth points
       return this.prisma.$transaction(async (tx) => {
         const updated = await tx.registration.update({
           where: { id },
@@ -123,6 +127,17 @@ export class RegistrationService {
         await tx.activity.update({
           where: { id: registration.activityId },
           data: { approvedCount: { decrement: 1 } },
+        });
+
+        // BR-PT-04: Deduct 50 growth points for cancelling approved registration
+        await this.pointService.award({
+          userId,
+          pointsType: 'GROWTH',
+          amount: -50,
+          ruleCode: 'CANCEL_APPROVED',
+          title: '取消已通过报名',
+          refType: 'REGISTRATION',
+          refId: id,
         });
 
         return updated;

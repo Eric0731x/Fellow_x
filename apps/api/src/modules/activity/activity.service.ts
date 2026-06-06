@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma, type ActivityState, type ActivityCategory } from '@prisma/client';
+import { PointService } from '../point/point.service';
 import type { CreateActivityDto } from './dto/create-activity.dto';
 import type { UpdateActivityDto } from './dto/update-activity.dto';
 import type { LifecycleDto } from './dto/lifecycle.dto';
@@ -27,7 +28,10 @@ const ALLOWED_TRANSITIONS: Record<string, Record<string, string>> = {
 
 @Injectable()
 export class ActivityService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private pointService: PointService,
+  ) {}
 
   async findAll(query: ActivityQueryDto) {
     const { page = 1, pageSize = 20, category, state, keyword, sort } = query;
@@ -212,9 +216,53 @@ export class ActivityService {
     const updateData: Record<string, unknown> = { state: newState };
 
     if (dto.action === 'end') {
-      // Points issuance hook — deferred to Phase 4
-      // TODO: Award ACTIVITY_JOIN (+120 growth) and ACTIVITY_JOIN_E (+50 exchange) to APPROVED registrants
-      // TODO: Award ACTIVITY_LAUNCH (+300 growth) to launcher
+      // Idempotency check — skip if points already issued for this activity
+      const alreadyIssued = await this.prisma.pointLog.findFirst({
+        where: { ruleCode: 'ACTIVITY_JOIN', refType: 'ACTIVITY', refId: id },
+      });
+
+      if (!alreadyIssued) {
+        // Fetch approved registrations
+        const approved = await this.prisma.registration.findMany({
+          where: { activityId: id, state: 'APPROVED' },
+          select: { userId: true },
+        });
+
+        // Issue points inside a transaction
+        await this.prisma.$transaction(async () => {
+          for (const reg of approved) {
+            await this.pointService.award({
+              userId: reg.userId,
+              pointsType: 'GROWTH',
+              amount: 120,
+              ruleCode: 'ACTIVITY_JOIN',
+              title: '完成活动参与',
+              refType: 'ACTIVITY',
+              refId: id,
+            });
+            await this.pointService.award({
+              userId: reg.userId,
+              pointsType: 'EXCHANGE',
+              amount: 50,
+              ruleCode: 'ACTIVITY_JOIN_E',
+              title: '完成活动参与',
+              refType: 'ACTIVITY',
+              refId: id,
+            });
+          }
+
+          // Award launcher
+          await this.pointService.award({
+            userId: activity.launcherId,
+            pointsType: 'GROWTH',
+            amount: 300,
+            ruleCode: 'ACTIVITY_LAUNCH',
+            title: '活动发起奖励',
+            refType: 'ACTIVITY',
+            refId: id,
+          });
+        });
+      }
     }
 
     return this.prisma.activity.update({

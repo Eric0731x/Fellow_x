@@ -33,8 +33,8 @@ export class AdminController {
   }
 
   @Post('points/adjust')
-  adjustPoints(@Body() dto: AdjustPointsDto) {
-    return this.adminService.adjustPoints(dto);
+  adjustPoints(@Body() dto: AdjustPointsDto, @CurrentUser() admin: { id: string }) {
+    return this.adminService.adjustPoints(dto, admin.id);
   }
 
   @Get('points/transactions')
