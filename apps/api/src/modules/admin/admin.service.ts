@@ -13,10 +13,162 @@ export class AdminService {
     private pointService: PointService,
   ) {}
 
-  async dashboard() { throw new Error('Not implemented'); }
-  async findMembers(_query: Record<string, string>) { throw new Error('Not implemented'); }
-  async findMember(_id: string) { throw new Error('Not implemented'); }
-  async updateMemberStatus(_id: string, _dto: UpdateStatusDto) { throw new Error('Not implemented'); }
+  async dashboard() {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [
+      memberCount,
+      launcherCount,
+      activeActivityCount,
+      monthlyPointsCount,
+      monthlyRewardCount,
+      pendingActivityReviews,
+      pendingLauncherApps,
+      levelDistribution,
+    ] = await Promise.all([
+      this.prisma.user.count({ where: { role: 'MEMBER', deletedAt: null } }),
+      this.prisma.user.count({ where: { role: 'LAUNCHER', deletedAt: null } }),
+      this.prisma.activity.count({
+        where: { state: { in: ['REGISTRATION_OPEN', 'IN_PROGRESS'] as ActivityState[] }, deletedAt: null },
+      }),
+      this.prisma.pointLog.count({ where: { createdAt: { gte: startOfMonth } } }),
+      this.prisma.rewardOrder.count({ where: { createdAt: { gte: startOfMonth } } }),
+      this.prisma.activity.count({
+        where: { state: 'PENDING_REVIEW' as ActivityState, deletedAt: null },
+      }),
+      this.prisma.launcherApplication.count({ where: { status: 'PENDING' } }),
+      this.prisma.user.groupBy({
+        by: ['levelId'],
+        _count: true,
+        where: { deletedAt: null },
+      }),
+    ]);
+
+    const levels = await this.prisma.level.findMany({
+      select: { id: true, name: true },
+      orderBy: { id: 'asc' },
+    });
+
+    const levelDistributionWithNames = levelDistribution.map((ld) => {
+      const level = levels.find((l) => l.id === ld.levelId);
+      return { levelId: ld.levelId, name: level?.name ?? 'Unknown', count: ld._count };
+    });
+
+    return {
+      memberCount,
+      launcherCount,
+      activeActivityCount,
+      monthlyPointsCount,
+      monthlyRewardCount,
+      pendingActivityReviews,
+      pendingLauncherApps,
+      levelDistribution: levelDistributionWithNames,
+    };
+  }
+
+  async findMembers(query: Record<string, string>) {
+    const page = parseInt(query.page ?? '1', 10);
+    const pageSize = Math.min(parseInt(query.pageSize ?? '20', 10), 100);
+
+    const where: Record<string, unknown> = { deletedAt: null };
+    if (query.role) where.role = query.role;
+    if (query.status) where.status = query.status;
+    if (query.keyword) {
+      where.OR = [
+        { name: { contains: query.keyword, mode: 'insensitive' } },
+        { memberNo: { contains: query.keyword, mode: 'insensitive' } },
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          id: true,
+          name: true,
+          memberNo: true,
+          phone: true,
+          role: true,
+          status: true,
+          growthPoints: true,
+          exchangePoints: true,
+          createdAt: true,
+          level: { select: { id: true, name: true } },
+        },
+      }),
+      this.prisma.user.count({ where }),
+    ]);
+
+    return { items, total, page, pageSize };
+  }
+
+  async findMember(id: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        memberNo: true,
+        phone: true,
+        email: true,
+        gender: true,
+        birthday: true,
+        avatarUrl: true,
+        role: true,
+        status: true,
+        growthPoints: true,
+        exchangePoints: true,
+        participationDays: true,
+        streakDays: true,
+        createdAt: true,
+        lastLoginAt: true,
+        level: { select: { id: true, name: true } },
+        _count: {
+          select: {
+            registrations: true,
+            rewardOrders: true,
+            pointLogs: true,
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: '会员不存在' });
+    }
+
+    return user;
+  }
+
+  async updateMemberStatus(id: string, dto: UpdateStatusDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id, deletedAt: null },
+      select: { id: true, status: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: '会员不存在' });
+    }
+
+    // STATE_MACHINE §5: admin can only toggle ACTIVE↔SUSPENDED
+    if (dto.status !== 'ACTIVE' && dto.status !== 'SUSPENDED') {
+      throw new BadRequestException({ code: 'VALIDATION', message: '管理员只能切换 ACTIVE/SUSPENDED 状态' });
+    }
+
+    if (user.status !== 'ACTIVE' && user.status !== 'SUSPENDED') {
+      throw new ConflictException({ code: 'INVALID_STATE_TRANSITION', message: '当前状态不允许该操作' });
+    }
+
+    return this.prisma.user.update({
+      where: { id },
+      data: { status: dto.status as 'ACTIVE' | 'SUSPENDED' },
+      select: { id: true, name: true, status: true },
+    });
+  }
 
   async adjustPoints(dto: AdjustPointsDto, adminId: string) {
     return this.pointService.award({
@@ -155,8 +307,28 @@ export class AdminService {
       data: { status: dto.status },
     });
   }
-  async findLevels() { throw new Error('Not implemented'); }
-  async updateLevel(_id: string, _dto: Record<string, unknown>) { throw new Error('Not implemented'); }
+
+  async findLevels() {
+    return this.prisma.level.findMany({ orderBy: { id: 'asc' } });
+  }
+
+  async updateLevel(id: string, dto: Record<string, unknown>) {
+    const level = await this.prisma.level.findUnique({ where: { id: parseInt(id, 10) } });
+    if (!level) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: '等级不存在' });
+    }
+
+    // BR-LV-03: do not allow changing minGrowthPoints (no retroactive downgrade)
+    const data: Record<string, unknown> = {};
+    if (dto.name !== undefined) data.name = dto.name;
+    if (dto.privileges !== undefined) data.privileges = dto.privileges;
+    if (dto.canApplyLauncher !== undefined) data.canApplyLauncher = dto.canApplyLauncher;
+
+    return this.prisma.level.update({
+      where: { id: parseInt(id, 10) },
+      data,
+    });
+  }
 
   async findActivitiesForReview(query: Record<string, string>) {
     const page = parseInt(query.page ?? '1', 10);
@@ -223,6 +395,96 @@ export class AdminService {
     });
   }
 
-  async findLauncherApplications(_query: Record<string, string>) { throw new Error('Not implemented'); }
-  async reviewLauncherApplication(_id: string, _dto: AdminReviewDto) { throw new Error('Not implemented'); }
+  async findLauncherApplications(query: Record<string, string>) {
+    const page = parseInt(query.page ?? '1', 10);
+    const pageSize = Math.min(parseInt(query.pageSize ?? '20', 10), 100);
+
+    const where: Record<string, unknown> = {};
+    if (query.status) where.status = query.status;
+
+    const [items, total] = await Promise.all([
+      this.prisma.launcherApplication.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          user: { select: { id: true, name: true, memberNo: true, levelId: true } },
+        },
+      }),
+      this.prisma.launcherApplication.count({ where }),
+    ]);
+
+    return { items, total, page, pageSize };
+  }
+
+  async reviewLauncherApplication(id: string, dto: AdminReviewDto, adminId: string) {
+    const application = await this.prisma.launcherApplication.findUnique({
+      where: { id },
+    });
+
+    if (!application) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: '申请不存在' });
+    }
+
+    if (application.status !== 'PENDING') {
+      throw new ConflictException({ code: 'INVALID_STATE_TRANSITION', message: '只有待审核的申请可以审批' });
+    }
+
+    if (dto.approved) {
+      const [updatedApplication] = await this.prisma.$transaction([
+        this.prisma.launcherApplication.update({
+          where: { id },
+          data: {
+            status: 'APPROVED',
+            reviewedBy: adminId,
+            reviewedAt: new Date(),
+          },
+        }),
+        this.prisma.user.update({
+          where: { id: application.userId },
+          data: { role: 'LAUNCHER' },
+        }),
+        this.prisma.notification.create({
+          data: {
+            userId: application.userId,
+            type: 'LAUNCHER_REVIEW',
+            title: '发起人申请已通过',
+            body: '恭喜您，发起人申请已通过审核',
+            refType: 'LAUNCHER_APPLICATION',
+            refId: id,
+          },
+        }),
+      ]);
+      return updatedApplication;
+    }
+
+    // Reject
+    if (!dto.rejectReason) {
+      throw new BadRequestException({ code: 'VALIDATION', message: '请填写拒绝原因' });
+    }
+
+    const [updatedApplication] = await this.prisma.$transaction([
+      this.prisma.launcherApplication.update({
+        where: { id },
+        data: {
+          status: 'REJECTED',
+          rejectReason: dto.rejectReason,
+          reviewedBy: adminId,
+          reviewedAt: new Date(),
+        },
+      }),
+      this.prisma.notification.create({
+        data: {
+          userId: application.userId,
+          type: 'LAUNCHER_REVIEW',
+          title: '发起人申请未通过',
+          body: dto.rejectReason,
+          refType: 'LAUNCHER_APPLICATION',
+          refId: id,
+        },
+      }),
+    ]);
+    return updatedApplication;
+  }
 }

@@ -98,7 +98,7 @@ export class AdminController {
   }
 
   @Post('launchers/:id/review')
-  reviewLauncherApplication(@Param('id') id: string, @Body() dto: AdminReviewDto) {
-    return this.adminService.reviewLauncherApplication(id, dto);
+  reviewLauncherApplication(@Param('id') id: string, @Body() dto: AdminReviewDto, @CurrentUser() admin: { id: string }) {
+    return this.adminService.reviewLauncherApplication(id, dto, admin.id);
   }
 }

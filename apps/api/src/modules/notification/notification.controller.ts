@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Param } from '@nestjs/common';
+import { Controller, Get, Put, Param, Query } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { NotificationService } from './notification.service';
@@ -10,8 +10,8 @@ export class NotificationController {
   constructor(private readonly notificationService: NotificationService) {}
 
   @Get()
-  findAll(@CurrentUser() user: { id: string }) {
-    return this.notificationService.findAll(user.id);
+  findAll(@CurrentUser() user: { id: string }, @Query() query: Record<string, string>) {
+    return this.notificationService.findAll(user.id, query);
   }
 
   @Put(':id/read')
