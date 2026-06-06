@@ -53,8 +53,8 @@ export class AdminController {
   }
 
   @Get('rewards')
-  findRewards() {
-    return this.adminService.findRewards();
+  findRewards(@Query() query: Record<string, string>) {
+    return this.adminService.findRewards(query);
   }
 
   @Post('rewards')

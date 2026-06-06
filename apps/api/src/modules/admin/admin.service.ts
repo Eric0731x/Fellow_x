@@ -4,7 +4,7 @@ import { PointService } from '../point/point.service';
 import type { AdjustPointsDto } from './dto/adjust-points.dto';
 import type { UpdateStatusDto } from './dto/update-status.dto';
 import type { AdminReviewDto } from './dto/review.dto';
-import type { ActivityState } from '@prisma/client';
+import type { ActivityState, RewardCategory } from '@prisma/client';
 
 @Injectable()
 export class AdminService {
@@ -78,10 +78,83 @@ export class AdminService {
     });
   }
 
-  async findRewards() { throw new Error('Not implemented'); }
-  async createReward(_dto: Record<string, unknown>) { throw new Error('Not implemented'); }
-  async updateReward(_id: string, _dto: Record<string, unknown>) { throw new Error('Not implemented'); }
-  async updateRewardStatus(_id: string, _dto: UpdateStatusDto) { throw new Error('Not implemented'); }
+  async findRewards(query: Record<string, string>) {
+    const page = parseInt(query.page ?? '1', 10);
+    const pageSize = Math.min(parseInt(query.pageSize ?? '20', 10), 100);
+
+    const where: Record<string, unknown> = {};
+    if (query.category) where.category = query.category;
+    if (query.status) where.status = query.status;
+
+    const [items, total] = await Promise.all([
+      this.prisma.reward.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.reward.count({ where }),
+    ]);
+
+    return { items, total, page, pageSize };
+  }
+
+  async createReward(dto: Record<string, unknown>) {
+    if (!dto.title || typeof dto.title !== 'string' || dto.title.length > 100) {
+      throw new BadRequestException({ code: 'VALIDATION', message: '标题长度不超过100字' });
+    }
+    if (typeof dto.cost !== 'number' || dto.cost < 1) {
+      throw new BadRequestException({ code: 'VALIDATION', message: '兑换积分需大于0' });
+    }
+    if (typeof dto.stock !== 'number' || dto.stock < 0) {
+      throw new BadRequestException({ code: 'VALIDATION', message: '库存不能为负数' });
+    }
+
+    return this.prisma.reward.create({
+      data: {
+        title: dto.title as string,
+        description: (dto.description as string) ?? null,
+        imageUrl: (dto.imageUrl as string) ?? null,
+        category: ((dto.category as string) ?? 'TOOL') as RewardCategory,
+        cost: dto.cost as number,
+        stock: dto.stock as number,
+        status: 'ON_SHELF',
+      },
+    });
+  }
+
+  async updateReward(id: string, dto: Record<string, unknown>) {
+    const reward = await this.prisma.reward.findUnique({ where: { id } });
+    if (!reward) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: '福利不存在' });
+    }
+
+    const data: Record<string, unknown> = {};
+    if (dto.title !== undefined) data.title = dto.title;
+    if (dto.description !== undefined) data.description = dto.description;
+    if (dto.imageUrl !== undefined) data.imageUrl = dto.imageUrl;
+    if (dto.category !== undefined) data.category = dto.category;
+    if (dto.cost !== undefined) data.cost = dto.cost;
+    if (dto.stock !== undefined) data.stock = dto.stock;
+
+    return this.prisma.reward.update({ where: { id }, data });
+  }
+
+  async updateRewardStatus(id: string, dto: UpdateStatusDto) {
+    const reward = await this.prisma.reward.findUnique({ where: { id } });
+    if (!reward) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: '福利不存在' });
+    }
+
+    if (dto.status !== 'ON_SHELF' && dto.status !== 'OFF_SHELF') {
+      throw new BadRequestException({ code: 'VALIDATION', message: '状态值无效' });
+    }
+
+    return this.prisma.reward.update({
+      where: { id },
+      data: { status: dto.status },
+    });
+  }
   async findLevels() { throw new Error('Not implemented'); }
   async updateLevel(_id: string, _dto: Record<string, unknown>) { throw new Error('Not implemented'); }
 
