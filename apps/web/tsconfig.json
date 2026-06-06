@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "noEmit": true,
+    "paths": {
+      "@fellowx/shared": ["../../packages/shared/dist"],
+      "@fellowx/shared/*": ["../../packages/shared/dist/*"],
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "vite-env.d.ts"],
+  "exclude": ["node_modules", "dist"]
+}

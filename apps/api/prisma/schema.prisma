@@ -1,0 +1,396 @@
+// FellowX Database Schema — source of truth: specs/DATABASE_SCHEMA.md
+// PostgreSQL 14+, snake_case naming, UUID PKs, timestamptz UTC
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums (from DATABASE_SCHEMA.md §13) ────────────────────────
+
+enum UserRole {
+  MEMBER
+  LAUNCHER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATING
+  DELETED
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  UNKNOWN
+}
+
+enum ActivityState {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  REGISTRATION_OPEN
+  IN_PROGRESS
+  ENDED
+  REJECTED
+  CANCELLED
+}
+
+enum RegistrationState {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum ApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PointsType {
+  GROWTH
+  EXCHANGE
+  BOTH
+}
+
+enum RewardStatus {
+  ON_SHELF
+  OFF_SHELF
+}
+
+enum OrderState {
+  PENDING
+  COMPLETED
+  CANCELLED
+  FULFILLED
+}
+
+enum NotificationType {
+  ACTIVITY_REVIEW
+  LAUNCHER_REVIEW
+  REGISTRATION_REVIEW
+  ACTIVITY_CANCELLED
+  POINTS
+  SYSTEM
+}
+
+enum ActivityCategory {
+  CO_LEARNING  @map("共学")
+  READING      @map("精读")
+  SHARING      @map("分享")
+  TRAINING     @map("训练")
+  OFFLINE      @map("线下")
+  CO_BUILDING  @map("共建")
+  SUBMISSION   @map("投稿")
+}
+
+enum RewardCategory {
+  TOOL             @map("工具")
+  MERCHANDISE      @map("周边")
+  SERVICE          @map("服务")
+  MEMBER_PRIVILEGE @map("会员特权")
+}
+
+enum BadgeConditionType {
+  COUNT
+  STREAK
+  LEVEL
+  MANUAL
+}
+
+// ─── Tables ─────────────────────────────────────────────────────
+
+model Level {
+  id                Int      @id @default(autoincrement())
+  name              String   @db.VarChar(20)
+  minGrowthPoints    Int      @unique @map("min_growth_points")
+  privileges        String?
+  canApplyLauncher  Boolean  @default(false) @map("can_apply_launcher")
+
+  users             User[]   @relation("UserLevel")
+  activities        Activity[] @relation("ActivityMinLevel")
+
+  @@map("levels")
+}
+
+model User {
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  memberNo             String       @unique @map("member_no") @db.VarChar(16)
+  phone                String       @unique @db.VarChar(20)
+  passwordHash         String       @map("password_hash") @db.VarChar(255)
+  name                 String       @db.VarChar(50)
+  avatarUrl            String?      @map("avatar_url") @db.VarChar(512)
+  gender               Gender       @default(UNKNOWN)
+  birthday             DateTime?    @db.Date
+  email                String?      @db.VarChar(120)
+  role                 UserRole     @default(MEMBER)
+  status               UserStatus   @default(ACTIVE)
+  levelId              Int          @map("level_id") @db.SmallInt
+  growthPoints         Int          @default(0) @map("growth_points")
+  exchangePoints       Int          @default(0) @map("exchange_points")
+  participationDays    Int          @default(0) @map("participation_days")
+  streakDays           Int          @default(0) @map("streak_days")
+  profileCompleted     Boolean      @default(false) @map("profile_completed")
+  profilePromptSkipped Boolean      @default(false) @map("profile_prompt_skipped")
+  deactivateAt         DateTime?    @map("deactivate_at") @db.Timestamptz()
+  lastLoginAt          DateTime?    @map("last_login_at") @db.Timestamptz()
+  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt            DateTime     @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt            DateTime?    @map("deleted_at") @db.Timestamptz()
+
+  level                Level        @relation("UserLevel", fields: [levelId], references: [id])
+  launchedActivities   Activity[]   @relation("ActivityLauncher")
+  registrations        Registration[]
+  pointLogs            PointLog[]
+  rewardOrders         RewardOrder[]
+  applications         LauncherApplication[]
+  notifications        Notification[]
+  userBadges           UserBadge[]
+  reviewedActivities   Activity[]   @relation("ActivityReviewer")
+  reviewedRegistrations Registration[] @relation("RegistrationReviewer")
+  reviewedApplications LauncherApplication[] @relation("ApplicationReviewer")
+  auditLogs            AuditLog[]
+  pointLogOperators    PointLog[]   @relation("PointLogOperator")
+  refreshTokens        RefreshToken[]
+
+  @@index([phone])
+  @@index([memberNo])
+  @@index([role, status])
+  @@index([levelId])
+  @@map("users")
+}
+
+model LauncherApplication {
+  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String            @map("user_id") @db.Uuid
+  description String            @db.VarChar(500)
+  status      ApplicationStatus @default(PENDING)
+  rejectReason String?          @map("reject_reason") @db.VarChar(500)
+  reviewedBy  String?           @map("reviewed_by") @db.Uuid
+  reviewedAt  DateTime?         @map("reviewed_at") @db.Timestamptz()
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user        User              @relation(fields: [userId], references: [id])
+  reviewer    User?             @relation("ApplicationReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@map("launcher_applications")
+}
+
+model Activity {
+  id                    String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  launcherId            String          @map("launcher_id") @db.Uuid
+  title                 String          @db.VarChar(100)
+  category              ActivityCategory
+  summary               String          @db.VarChar(200)
+  content               String?
+  location              String          @db.VarChar(200)
+  coverImageUrl         String?         @map("cover_image_url") @db.VarChar(512)
+  state                 ActivityState   @default(DRAFT)
+  minLevelId            Int?            @map("min_level_id") @db.SmallInt
+  maxParticipants       Int             @map("max_participants")
+  approvedCount         Int             @default(0) @map("approved_count")
+  startTime             DateTime?       @map("start_time") @db.Timestamptz()
+  endTime               DateTime?       @map("end_time") @db.Timestamptz()
+  registrationDeadline  DateTime?       @map("registration_deadline") @db.Timestamptz()
+  rejectReason          String?         @map("reject_reason") @db.VarChar(500)
+  reviewedBy            String?         @map("reviewed_by") @db.Uuid
+  publishedAt           DateTime?       @map("published_at") @db.Timestamptz()
+  createdAt             DateTime        @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime        @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt             DateTime?       @map("deleted_at") @db.Timestamptz()
+
+  launcher              User            @relation("ActivityLauncher", fields: [launcherId], references: [id])
+  minLevel              Level?          @relation("ActivityMinLevel", fields: [minLevelId], references: [id])
+  reviewer              User?           @relation("ActivityReviewer", fields: [reviewedBy], references: [id])
+  registrations         Registration[]
+
+  @@index([state])
+  @@index([launcherId])
+  @@index([category])
+  @@index([registrationDeadline])
+  @@index([state, startTime])
+  @@map("activities")
+}
+
+model Registration {
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  activityId   String            @map("activity_id") @db.Uuid
+  userId       String            @map("user_id") @db.Uuid
+  state        RegistrationState @default(PENDING)
+  contact      String?           @db.VarChar(100)
+  note         String?           @db.VarChar(500)
+  rejectReason String?           @map("reject_reason") @db.VarChar(500)
+  reviewedBy   String?           @map("reviewed_by") @db.Uuid
+  reviewedAt   DateTime?         @map("reviewed_at") @db.Timestamptz()
+  cancelledAt  DateTime?         @map("cancelled_at") @db.Timestamptz()
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime          @updatedAt @map("updated_at") @db.Timestamptz()
+
+  activity     Activity          @relation(fields: [activityId], references: [id])
+  user         User              @relation(fields: [userId], references: [id])
+  reviewer     User?             @relation("RegistrationReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([activityId, state])
+  @@index([userId])
+  @@map("registrations")
+}
+
+model PointRule {
+  code        String     @id @db.VarChar(40)
+  description String     @db.VarChar(120)
+  pointsType  PointsType @map("points_type")
+  amount      Int?
+  enabled     Boolean    @default(true)
+  isSystem    Boolean    @default(true) @map("is_system")
+
+  pointLogs   PointLog[]
+
+  @@map("point_rules")
+}
+
+model PointLog {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String     @map("user_id") @db.Uuid
+  pointsType   PointsType @map("points_type")
+  amount       Int
+  balanceAfter Int        @map("balance_after")
+  ruleCode     String?    @map("rule_code") @db.VarChar(40)
+  title        String     @db.VarChar(160)
+  refType      String?    @map("ref_type") @db.VarChar(40)
+  refId        String?    @map("ref_id") @db.Uuid
+  operatorId   String?    @map("operator_id") @db.Uuid
+  reason       String?    @db.VarChar(500)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz()
+
+  user         User       @relation(fields: [userId], references: [id])
+  rule         PointRule? @relation(fields: [ruleCode], references: [code])
+  operator     User?      @relation("PointLogOperator", fields: [operatorId], references: [id])
+
+  @@index([userId])
+  @@index([pointsType])
+  @@index([refType, refId])
+  @@map("point_logs")
+}
+
+model Reward {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title         String       @db.VarChar(100)
+  description   String?
+  imageUrl      String?      @map("image_url") @db.VarChar(512)
+  category      RewardCategory
+  cost          Int
+  stock         Int
+  redeemedCount Int          @default(0) @map("redeemed_count")
+  status        RewardStatus @default(ON_SHELF)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz()
+
+  orders        RewardOrder[]
+
+  @@index([status, category])
+  @@map("rewards")
+}
+
+model RewardOrder {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  rewardId         String    @map("reward_id") @db.Uuid
+  cost             Int
+  state            OrderState @default(COMPLETED)
+  pointLogId       String?   @map("point_log_id") @db.Uuid
+  fulfillmentNote  String?   @map("fulfillment_note") @db.VarChar(500)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user             User      @relation(fields: [userId], references: [id])
+  reward           Reward    @relation(fields: [rewardId], references: [id])
+
+  @@index([userId])
+  @@index([rewardId])
+  @@map("reward_orders")
+}
+
+model Notification {
+  id        String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType
+  title     String           @db.VarChar(120)
+  body      String?          @db.VarChar(500)
+  refType   String?          @map("ref_type") @db.VarChar(40)
+  refId     String?          @map("ref_id") @db.Uuid
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz()
+
+  user      User             @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+model Badge {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code          String            @unique @db.VarChar(40)
+  name          String            @db.VarChar(40)
+  icon          String            @db.VarChar(16)
+  hint          String            @db.VarChar(120)
+  conditionType BadgeConditionType @map("condition_type")
+  threshold     Int?
+
+  userBadges    UserBadge[]
+
+  @@map("badges")
+}
+
+model UserBadge {
+  userId   String   @map("user_id") @db.Uuid
+  badgeId  String   @map("badge_id") @db.Uuid
+  earnedAt DateTime @default(now()) @map("earned_at") @db.Timestamptz()
+
+  user     User     @relation(fields: [userId], references: [id])
+  badge    Badge    @relation(fields: [badgeId], references: [id])
+
+  @@id([userId, badgeId])
+  @@index([userId])
+  @@map("user_badges")
+}
+
+model AuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  operatorId String   @map("operator_id") @db.Uuid
+  action     String   @db.VarChar(60)
+  targetType String   @map("target_type") @db.VarChar(40)
+  targetId   String?  @map("target_id") @db.Uuid
+  payload    Json?
+  ip         String?  @db.Inet
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  operator   User     @relation(fields: [operatorId], references: [id])
+
+  @@index([operatorId, createdAt(sort: Desc)])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
+
+model RefreshToken {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @unique
+  expiresAt DateTime @map("expires_at") @db.Timestamptz()
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
