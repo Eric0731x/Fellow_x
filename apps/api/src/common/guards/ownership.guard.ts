@@ -22,8 +22,16 @@ export class OwnershipGuard implements CanActivate {
     const resourceId = request.params.id;
     if (!user || !resourceId) throw new ForbiddenException('FORBIDDEN');
 
-    // Ownership check will be implemented per-resource in Phase 1+
-    // For now, skeleton returns true
+    if (resource === 'activity') {
+      const activity = await this.prisma.activity.findFirst({
+        where: { id: resourceId, deletedAt: null },
+        select: { launcherId: true },
+      });
+      if (!activity || activity.launcherId !== user.id) {
+        throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权操作此活动' });
+      }
+    }
+
     return true;
   }
 }

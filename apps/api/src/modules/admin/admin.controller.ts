@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Put, Body, Param, Query } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AdminService } from './admin.service';
 import { AdjustPointsDto } from './dto/adjust-points.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
@@ -87,8 +88,8 @@ export class AdminController {
   }
 
   @Post('activities/:id/review')
-  reviewActivity(@Param('id') id: string, @Body() dto: AdminReviewDto) {
-    return this.adminService.reviewActivity(id, dto);
+  reviewActivity(@Param('id') id: string, @Body() dto: AdminReviewDto, @CurrentUser() admin: { id: string }) {
+    return this.adminService.reviewActivity(id, dto, admin.id);
   }
 
   @Get('launchers')
