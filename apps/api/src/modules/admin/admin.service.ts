@@ -369,7 +369,7 @@ export class AdminService {
     }
 
     if (dto.approved) {
-      return this.prisma.activity.update({
+      const updated = await this.prisma.activity.update({
         where: { id },
         data: {
           state: 'PUBLISHED',
@@ -378,6 +378,17 @@ export class AdminService {
           rejectReason: null,
         },
       });
+      await this.prisma.notification.create({
+        data: {
+          userId: activity.launcherId,
+          type: 'ACTIVITY_REVIEW',
+          title: '活动审核已通过',
+          body: `您的活动「${activity.title}」已通过审核并发布`,
+          refType: 'ACTIVITY',
+          refId: id,
+        },
+      });
+      return updated;
     }
 
     // Reject
@@ -385,7 +396,7 @@ export class AdminService {
       throw new BadRequestException({ code: 'VALIDATION', message: '请填写拒绝原因' });
     }
 
-    return this.prisma.activity.update({
+    const updated = await this.prisma.activity.update({
       where: { id },
       data: {
         state: 'REJECTED',
@@ -393,6 +404,17 @@ export class AdminService {
         reviewedBy: adminId,
       },
     });
+    await this.prisma.notification.create({
+      data: {
+        userId: activity.launcherId,
+        type: 'ACTIVITY_REVIEW',
+        title: '活动审核未通过',
+        body: dto.rejectReason,
+        refType: 'ACTIVITY',
+        refId: id,
+      },
+    });
+    return updated;
   }
 
   async findLauncherApplications(query: Record<string, string>) {
